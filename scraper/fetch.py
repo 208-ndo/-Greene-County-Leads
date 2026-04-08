@@ -12,10 +12,9 @@ from playwright.async_api import async_playwright
 # CONFIGURATION
 # ==========================================
 CLERK_PORTAL_URL = "https://greenecountymo.gov/recorder/real_estate_search/type.php"
-# REPLACE THIS with the actual direct link to the .dbf file from the Assessor's site
 PARCEL_DATA_URL = "https://greenecountymo.gov/assessor/bulk_data/parcels.dbf" 
 
-LOOKBACK_DAYS = 365
+LOOKBACK_DAYS = 365 # Set to 365 to force results for testing
 OUTPUT_JSON_DASHBOARD = "dashboard/records.json"
 OUTPUT_JSON_DATA = "data/records.json"
 OUTPUT_CSV_GHL = "ghl_export.csv"
@@ -48,26 +47,28 @@ class ParcelLookup:
         self.download_and_process(dbf_url)
 
     def download_and_process(self, url):
-        print(f"[*] Downloading bulk parcel data from {url}...")
+        print(f"[*] Attempting to download Parcel DBF from: {url}")
         try:
             r = requests.get(url, timeout=30)
+            if r.status_code != 200:
+                print(f"[!] ERROR: Could not download DBF. Server returned status {r.status_code}")
+                return
+
             with open("temp_parcels.dbf", "wb") as f:
                 f.write(r.content)
             
+            print("[*] DBF downloaded. Processing records...")
             table = DBF("temp_parcels.dbf", load=True)
+            count = 0
             for record in table:
-                # Normalize name variants for lookup
                 name = str(record.get('OWNER', record.get('OWN1', ''))).strip().upper()
                 if not name: continue
                 
-                # Store variants: "FIRST LAST", "LAST, FIRST", "LAST FIRST"
                 variants = [name]
-                if ',' in name:
-                    variants.append(name.replace(',', '').strip())
+                if ',' in name: variants.append(name.replace(',', '').strip())
                 else:
                     parts = name.split(' ')
-                    if len(parts) >= 2:
-                        variants.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
+                    if len(parts) >= 2: variants.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
                 
                 for v in variants:
                     self.lookup[v] = {
@@ -79,9 +80,10 @@ class ParcelLookup:
                         "mail_state": record.get('STATE', 'MO'),
                         "mail_zip": record.get('ZIP', record.get('MAILZIP', ''))
                     }
-            print(f"[+] Loaded {len(self.lookup)} owner records into memory.")
+                count += 1
+            print(f"[+] SUCCESS: Loaded {count} property owners into memory.")
         except Exception as e:
-            print(f"[!] Error processing DBF: {e}")
+            print(f"[!] CRITICAL ERROR processing DBF: {e}")
 
     def get_address(self, name):
         name = str(name).strip().upper()
@@ -93,7 +95,6 @@ class ParcelLookup:
 def calculate_score(record):
     score = 30
     flags = []
-    
     cat = record['cat']
     if cat == "LP": flags.append("Lis pendens"); score += 10
     if cat == "NOFC": flags.append("Pre-foreclosure"); score += 10
@@ -101,26 +102,22 @@ def calculate_score(record):
     if cat == "TAXDEED" or cat == "LNCORPTX": flags.append("Tax lien"); score += 10
     if cat == "LNMECH": flags.append("Mechanic lien"); score += 10
     if cat == "PRO": flags.append("Probate / estate"); score += 10
-    
     if "LLC" in record['owner'].upper() or "CORP" in record['owner'].upper():
         flags.append("LLC / corp owner"); score += 10
-    
-    # High Value Debt
     try:
         amt = float(record['amount'].replace('$', '').replace(',', ''))
         if amt > 100000: score += 15
         elif amt > 50000: score += 10
     except: pass
-
     if record['prop_address']: score += 5
-    
     return score, flags
 
 # ==========================================
-# MAIN SCRAPER
-# ==========================================
+// MAIN SCRAPER
+// ==========================================
 async def scrape_clerk():
     async with async_playwright() as p:
+        print("[*] Launching Browser...")
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
@@ -130,26 +127,29 @@ async def scrape_clerk():
         
         end_date = datetime.now().strftime("%m/%d/%Y")
         start_date = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%m/%d/%Y")
+        print(f"[*] Searching records from {start_date} to {end_date}")
         
         for doc_label, doc_code in DOC_TYPES.items():
-            print(f"[*] Scraping {doc_label}...")
+            print(f"[*] Checking {doc_label}...", end=" ")
             try:
                 await page.goto(CLERK_PORTAL_URL)
                 await page.select_option('select[name="doc_type"]', label=doc_label)
                 await page.fill('input[name="begin_date"]', start_date)
                 await page.fill('input[name="end_date"]', end_date)
                 await page.click('input[type="submit"]')
-                
                 await page.wait_for_load_state("networkidle")
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'lxml')
-                table = soup.find('table', {'id': 'resultsTable'}) # Update ID based on actual site
+                # Try multiple table selectors in case the ID changed
+                table = soup.find('table', {'id': 'resultsTable'}) or soup.find('table')
                 
                 if not table:
+                    print("0 found.")
                     continue
                 
-                rows = table.find_all('tr')[1:] # Skip header
+                rows = table.find_all('tr')[1:] 
+                found_in_type = 0
                 for row in rows:
                     cols = row.find_all('td')
                     if len(cols) < 5: continue
@@ -182,11 +182,15 @@ async def scrape_clerk():
                     rec['score'] = score
                     rec['flags'] = flags
                     all_records.append(rec)
+                    found_in_type += 1
+                
+                print(f"{found_in_type} found.")
                     
             except Exception as e:
-                print(f"[!] Error scraping {doc_label}: {e}")
+                print(f"Error: {e}")
         
         await browser.close()
+        print(f"[*] TOTAL RAW LEADS COLLECTED: {len(all_records)}")
         return all_records
 
 def export_ghl(records):
@@ -196,21 +200,17 @@ def export_ghl(records):
                          "Property Address", "Property City", "Property State", "Property Zip", "Lead Type", 
                          "Document Type", "Date Filed", "Document Number", "Amount/Debt Owed", "Seller Score", 
                          "Motivated Seller Flags", "Source", "Public Records URL"])
-        
         for r in records:
             name_parts = r['owner'].split(' ', 1)
             first = name_parts[0] if len(name_parts) > 0 else ""
             last = name_parts[1] if len(name_parts) > 1 else ""
-            
-            writer.writerow([
-                first, last, r['mail_address'], r['mail_city'], r['mail_state'], r['mail_zip'],
-                r['prop_address'], r['prop_city'], r['prop_state'], r['prop_zip'],
-                r['cat_label'], r['doc_type'], r['filed'], r['doc_num'], r['amount'],
-                r['score'], ", ".join(r['flags']), "Greene County", r['clerk_url']
-            ])
+            writer.writerow([first, last, r['mail_address'], r['mail_city'], r['mail_state'], r['mail_zip'],
+                             r['prop_address'], r['prop_city'], r['prop_state'], r['prop_zip'],
+                             r['cat_label'], r['doc_type'], r['filed'], r['doc_num'], r['amount'],
+                             r['score'], ", ".join(r['flags']), "Greene County", r['clerk_url']])
 
 async def main():
-    print("[*] Starting FlowX Lead Engine...")
+    print("[*] Starting FlowX Debug Engine...")
     records = await scrape_clerk()
     
     output = {
@@ -229,7 +229,7 @@ async def main():
     with open(OUTPUT_JSON_DATA, 'w') as f: json.dump(output, f, indent=4)
     
     export_ghl(records)
-    print(f"[+] Success. {len(records)} leads captured. GHL CSV exported.")
+    print(f"[+] FINAL RESULT: {len(records)} leads saved to dashboard. GHL CSV exported.")
 
 if __name__ == "__main__":
     asyncio.run(main())
