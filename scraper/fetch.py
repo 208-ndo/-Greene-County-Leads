@@ -15,7 +15,7 @@ CLERK_PORTAL_URL = "https://greenecountymo.gov/recorder/real_estate_search/type.
 # REPLACE THIS with the actual direct link to the .dbf file from the Assessor's site
 PARCEL_DATA_URL = "https://greenecountymo.gov/assessor/bulk_data/parcels.dbf" 
 
-LOOKBACK_DAYS = 7
+LOOKBACK_DAYS = 365
 OUTPUT_JSON_DASHBOARD = "dashboard/records.json"
 OUTPUT_JSON_DATA = "data/records.json"
 OUTPUT_CSV_GHL = "ghl_export.csv"
