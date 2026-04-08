@@ -38,9 +38,9 @@ class ParcelLookup:
     def download_and_process(self, url):
         print(f"[*] Checking Parcel Data: {url}")
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=20)
             if r.status_code != 200:
-                print(f"[!] DBF FAILURE: Server returned {r.status_code}. Addresses will be blank.")
+                print(f"[!] DBF 404: File moved. Addresses will be blank for now.")
                 return
             with open("temp_parcels.dbf", "wb") as f: f.write(r.content)
             table = DBF("temp_parcels.dbf", load=True)
@@ -50,18 +50,15 @@ class ParcelLookup:
                 if not name: continue
                 self.lookup[name] = {"prop_addr": record.get('SITE_ADDR', ''), "mail_addr": record.get('ADDR_1', '')}
                 count += 1
-            print(f"[+] SUCCESS: Loaded {count} owners.")
-        except Exception as e: print(f"[!] DBF ERROR: {e}")
+            print(f"[+] Loaded {count} owners.")
+        except Exception as e: print(f"[!] DBF Error: {e}")
 
     def get_address(self, name):
         return self.lookup.get(str(name).strip().upper(), {})
 
-def calculate_score(record):
-    return 30, ["Lead Found"]
-
 async def scrape_clerk():
     async with async_playwright() as p:
-        print("[*] Launching Smart-Selector Browser...")
+        print("[*] Launching Page-Mapper Browser...")
         browser = await p.chromium.launch(headless=True) 
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/123.0.0.0 Safari/537.36")
         page = await context.new_page()
@@ -72,28 +69,35 @@ async def scrape_clerk():
         end_date = datetime.now().strftime("%m/%d/%Y")
         start_date = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%m/%d/%Y")
         
+        print(f"[*] Visiting: {CLERK_PORTAL_URL}")
+        await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
+        
+        # --- DIAGNOSTIC START: MAP THE PAGE ---
+        print("\n--- BEGIN PAGE MAP ---")
+        # Find every input, select, and button on the page
+        elements = await page.query_selector_all('input, select, button, textarea')
+        print(f"Found {len(elements)} interactive elements:")
+        for i, el in enumerate(elements):
+            name = await el.get_attribute('name') or "NO NAME"
+            id_ = await el.get_attribute('id') or "NO ID"
+            tag = await el.evaluate('el => el.tagName')
+            text = await el.inner_text() or ""
+            print(f"[{i}] Tag: {tag} | ID: {id_} | Name: {name} | Text: {text[:30]}")
+        print("--- END PAGE MAP ---\n")
+        # --- DIAGNOSTIC END ---
+
         for doc_label, doc_code in DOC_TYPES.items():
             print(f"[*] Checking {doc_label}...", end=" ")
             try:
-                await asyncio.sleep(2)
-                await page.goto(CLERK_PORTAL_URL, wait_until="domcontentloaded")
-                
-                # SMART SELECTOR: Try multiple ways to find the dropdown
-                dropdown = None
-                selectors = ['select[name="doc_type"]', 'select#doc_type', 'select']
-                for s in selectors:
-                    try:
-                        dropdown = await page.wait_for_selector(s, timeout=5000)
-                        if dropdown: break
-                    except: continue
-                
+                # Using a generic search for the dropdown
+                dropdown = await page.query_selector('select')
                 if not dropdown:
-                    print("FAILED (Selector not found).")
+                    print("FAILED (No select found).")
                     continue
                 
                 await dropdown.select_option(label=doc_label)
                 
-                # SMART FILL: Find date inputs regardless of name
+                # Try to find the date inputs by order
                 date_inputs = await page.query_selector_all('input[type="text"]')
                 if len(date_inputs) >= 2:
                     await date_inputs[0].fill(start_date)
@@ -119,11 +123,7 @@ async def scrape_clerk():
                     if len(cols) < 5: continue
                     owner = cols[2].text.strip()
                     addr = parcel_sys.get_address(owner)
-                    all_records.append({
-                        "owner": owner, "prop_address": addr.get("prop_addr", ""), 
-                        "cat_label": doc_label, "filed": cols[1].text.strip(),
-                        "doc_num": cols[0].text.strip(), "amount": cols[4].text.strip() if len(cols)>4 else "0"
-                    })
+                    all_records.append({"owner": owner, "prop_address": addr.get("prop_addr", ""), "cat_label": doc_label})
                     found_count += 1
                 print(f"{found_count} found.")
             except Exception as e: print(f"Error: {e}")
@@ -143,10 +143,10 @@ def export_ghl(records):
             first = name_parts[0] if len(name_parts) > 0 else ""
             last = name_parts[1] if len(name_parts) > 1 else ""
             writer.writerow([first, last, "", "", "MO", "", r['prop_address'], "", "MO", "", r['cat_label'], 
-                             r['cat_label'], r['filed'], r['doc_num'], r['amount'], "30", "Lead Found", "Greene County", ""])
+                             r['cat_label'], "Unknown", "Unknown", "0", "30", "Lead Found", "Greene County", ""])
 
 async def main():
-    print("[*] Starting FlowX Smart-Scrape...")
+    print("[*] Starting FlowX Page-Mapper...")
     records = await scrape_clerk()
     output = {"fetched_at": datetime.now().isoformat(), "total": len(records), "records": records}
     os.makedirs("dashboard", exist_ok=True); os.makedirs("data", exist_ok=True)
