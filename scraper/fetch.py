@@ -12,7 +12,6 @@ from playwright.async_api import async_playwright
 # CONFIGURATION
 # ==========================================
 CLERK_PORTAL_URL = "https://greenecountymo.gov/recorder/real_estate_search/type.php"
-# IMPORTANT: Replace this with the real .dbf link from the assessor's site
 PARCEL_DATA_URL = "https://greenecountymo.gov/assessor/bulk_data/parcels.dbf" 
 
 LOOKBACK_DAYS = 365 
@@ -114,13 +113,16 @@ def calculate_score(record):
     return score, flags
 
 # ==========================================
-# MAIN SCRAPER
+# MAIN SCRAPER (Stealth Version)
 # ==========================================
 async def scrape_clerk():
     async with async_playwright() as p:
-        print("[*] Launching Browser...")
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+        print("[*] Launching Stealth Browser...")
+        # Real User-Agent to bypass basic bot detection
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        
+        browser = await p.chromium.launch(headless=True) 
+        context = await browser.new_context(user_agent=user_agent)
         page = await context.new_page()
         
         parcel_sys = ParcelLookup(PARCEL_DATA_URL)
@@ -133,12 +135,27 @@ async def scrape_clerk():
         for doc_label, doc_code in DOC_TYPES.items():
             print(f"[*] Checking {doc_label}...", end=" ")
             try:
-                await page.goto(CLERK_PORTAL_URL)
+                # Small random delay to look human
+                await asyncio.sleep(2) 
+                
+                await page.goto(CLERK_PORTAL_URL, wait_until="domcontentloaded")
+                
+                await page.wait_for_selector('select[name="doc_type"]')
                 await page.select_option('select[name="doc_type"]', label=doc_label)
                 await page.fill('input[name="begin_date"]', start_date)
                 await page.fill('input[name="end_date"]', end_date)
                 await page.click('input[type="submit"]')
-                await page.wait_for_load_state("networkidle")
+                
+                # Wait for the actual results table to load
+                try:
+                    await page.wait_for_selector('#resultsTable', timeout=10000)
+                except:
+                    content = await page.content()
+                    if "no records" in content.lower() or "0 results" in content.lower():
+                        print("0 found (confirmed by site).")
+                    else:
+                        print("Blocked/Timeout.")
+                    continue
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'lxml')
