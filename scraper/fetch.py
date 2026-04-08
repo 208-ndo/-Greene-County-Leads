@@ -2,23 +2,11 @@ import asyncio
 import json
 import os
 import csv
-import subprocess
-import sys
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 from dbfread import DBF
 from playwright.async_api import async_playwright
-
-# ==========================================
-# AUTO-INSTALLER: Fixes the "ModuleNotFoundError" automatically
-# ==========================================
-try:
-    from playwright_stealth import stealth
-except ImportError:
-    print("[!] Stealth module missing. Installing now...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright-stealth"])
-    from playwright_stealth import stealth
 
 # ==========================================
 # CONFIGURATION
@@ -40,6 +28,19 @@ DOC_TYPES = {
     "MEDLN - MEDICAID LIEN": "MEDLN", "PROBATE - PROBATE": "PRO",
     "NOC - NOTICE OF COMMENCEMENT": "NOC", "RELLP - RELEASE LIS PENDENS": "RELLP"
 }
+
+# ==========================================
+# MANUAL STEALTH SCRIPT (Replaces the buggy library)
+# ==========================================
+async def apply_manual_stealth(page):
+    # This script hides the "I am a bot" flags from the browser
+    stealth_js = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    window.chrome = { runtime: {} };
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    """
+    await page.add_init_script(stealth_js)
 
 class ParcelLookup:
     def __init__(self, dbf_url):
@@ -64,8 +65,7 @@ class ParcelLookup:
 
 async def scrape_clerk():
     async with async_playwright() as p:
-        print("[*] Launching FINAL-STEALTH Browser...")
-        # Using a slightly different browser launch to avoid detection
+        print("[*] Launching BULLETPROOF Browser...")
         browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"]) 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -73,8 +73,8 @@ async def scrape_clerk():
         )
         page = await context.new_page()
         
-        # APPLY STEALTH PLUGIN - Fixed call
-        await stealth(page)
+        # APPLY MANUAL STEALTH
+        await apply_manual_stealth(page)
         
         parcel_sys = ParcelLookup(PARCEL_DATA_URL)
         all_records = []
@@ -85,16 +85,16 @@ async def scrape_clerk():
         for doc_label, doc_code in DOC_TYPES.items():
             print(f"[*] Checking {doc_label}...", end=" ")
             try:
-                await asyncio.sleep(4) # Extra delay to look more human
+                await asyncio.sleep(4)
                 await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
                 
-                # Captcha check
-                page_content = await page.content()
-                if "recaptcha" in page_content.lower() or "g-recaptcha" in page_content.lower():
+                # Check for Captcha
+                content = await page.content()
+                if "recaptcha" in content.lower() or "g-recaptcha" in content.lower():
                     print("CAPTCHA DETECTED. GitHub IP is blocked.")
                     break
 
-                # SMART SEARCH FOR DROPDOWN
+                # SMART SEARCH for the dropdown
                 dropdown = None
                 for selector in ['select[name="doc_type"]', 'select', '.dropdown']:
                     try:
@@ -108,18 +108,17 @@ async def scrape_clerk():
                 
                 await dropdown.select_option(label=doc_label)
                 
-                # Find date inputs by type
+                # Find date inputs
                 date_inputs = await page.query_selector_all('input[type="text"]')
                 if len(date_inputs) >= 2:
                     await date_inputs[0].fill(start_date)
                     await date_inputs[1].fill(end_date)
                 
-                # Find the search button
+                # Find submit button
                 search_btn = await page.query_selector('input[type="submit"]')
-                if search_btn:
-                    await search_btn.click()
+                if search_btn: await search_btn.click()
                 else:
-                    print("No search button found.")
+                    print("No search button.")
                     continue
                 
                 try:
@@ -163,7 +162,7 @@ def export_ghl(records):
                              r['cat_label'], "Unknown", "Unknown", "0", "30", "Lead Found", "Greene County", ""])
 
 async def main():
-    print("[*] Starting FlowX Final-Stealth...")
+    print("[*] Starting FlowX Bulletproof-Stealth...")
     records = await scrape_clerk()
     output = {"fetched_at": datetime.now().isoformat(), "total": len(records), "records": records}
     os.makedirs("dashboard", exist_ok=True); os.makedirs("data", exist_ok=True)
