@@ -12,9 +12,10 @@ from playwright.async_api import async_playwright
 # CONFIGURATION
 # ==========================================
 CLERK_PORTAL_URL = "https://greenecountymo.gov/recorder/real_estate_search/type.php"
+# IMPORTANT: Replace this with the real .dbf link from the assessor's site
 PARCEL_DATA_URL = "https://greenecountymo.gov/assessor/bulk_data/parcels.dbf" 
 
-LOOKBACK_DAYS = 365 # Set to 365 to force results for testing
+LOOKBACK_DAYS = 365 
 OUTPUT_JSON_DASHBOARD = "dashboard/records.json"
 OUTPUT_JSON_DATA = "data/records.json"
 OUTPUT_CSV_GHL = "ghl_export.csv"
@@ -47,9 +48,9 @@ class ParcelLookup:
         self.download_and_process(dbf_url)
 
     def download_and_process(self, url):
-        print(f"[*] Attempting to download Parcel DBF from: {url}")
+        print(f"[*] Attempting to download Master Parcel Data from: {url}")
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=60)
             if r.status_code != 200:
                 print(f"[!] ERROR: Could not download DBF. Server returned status {r.status_code}")
                 return
@@ -113,8 +114,8 @@ def calculate_score(record):
     return score, flags
 
 # ==========================================
-// MAIN SCRAPER
-// ==========================================
+# MAIN SCRAPER
+# ==========================================
 async def scrape_clerk():
     async with async_playwright() as p:
         print("[*] Launching Browser...")
@@ -141,7 +142,6 @@ async def scrape_clerk():
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'lxml')
-                # Try multiple table selectors in case the ID changed
                 table = soup.find('table', {'id': 'resultsTable'}) or soup.find('table')
                 
                 if not table:
