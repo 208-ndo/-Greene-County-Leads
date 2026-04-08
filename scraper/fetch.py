@@ -40,8 +40,8 @@ DOC_TYPES = {
 }
 
 # ==========================================
-// HELPER: DATA LOOKUP
-// ==========================================
+# HELPER: DATA LOOKUP
+# ==========================================
 class ParcelLookup:
     def __init__(self, dbf_url):
         self.lookup = {}
@@ -88,8 +88,8 @@ class ParcelLookup:
         return self.lookup.get(name, {})
 
 # ==========================================
-// SCORING ENGINE
-// ==========================================
+# SCORING ENGINE
+# ==========================================
 def calculate_score(record):
     score = 30
     flags = []
@@ -117,8 +117,8 @@ def calculate_score(record):
     return score, flags
 
 # ==========================================
-// MAIN SCRAPER
-// ==========================================
+# MAIN SCRAPER
+# ==========================================
 async def scrape_clerk():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
