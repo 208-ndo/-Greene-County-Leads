@@ -7,13 +7,13 @@ import requests
 from bs4 import BeautifulSoup
 from dbfread import DBF
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 CLERK_PORTAL_URL = "https://greenecountymo.gov/recorder/real_estate_search/type.php"
 PARCEL_DATA_URL = "https://greenecountymo.gov/assessor/bulk_data/parcels.dbf" 
-
 LOOKBACK_DAYS = 365 
 OUTPUT_JSON_DASHBOARD = "dashboard/records.json"
 OUTPUT_JSON_DATA = "data/records.json"
@@ -36,32 +36,33 @@ class ParcelLookup:
         self.download_and_process(dbf_url)
 
     def download_and_process(self, url):
-        print(f"[*] Checking Parcel Data: {url}")
+        print(f"[*] Checking Parcel Data...")
         try:
             r = requests.get(url, timeout=20)
-            if r.status_code != 200:
-                print(f"[!] DBF 404: File moved. Addresses will be blank for now.")
-                return
+            if r.status_code != 200: return
             with open("temp_parcels.dbf", "wb") as f: f.write(r.content)
             table = DBF("temp_parcels.dbf", load=True)
-            count = 0
             for record in table:
                 name = str(record.get('OWNER', record.get('OWN1', ''))).strip().upper()
                 if not name: continue
                 self.lookup[name] = {"prop_addr": record.get('SITE_ADDR', ''), "mail_addr": record.get('ADDR_1', '')}
-                count += 1
-            print(f"[+] Loaded {count} owners.")
-        except Exception as e: print(f"[!] DBF Error: {e}")
+        except: pass
 
     def get_address(self, name):
         return self.lookup.get(str(name).strip().upper(), {})
 
 async def scrape_clerk():
     async with async_playwright() as p:
-        print("[*] Launching Page-Mapper Browser...")
+        print("[*] Launching ULTRA-STEALTH Browser...")
         browser = await p.chromium.launch(headless=True) 
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/123.0.0.0 Safari/537.36")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
         page = await context.new_page()
+        
+        # APPLY STEALTH PLUGIN
+        await stealth_async(page)
         
         parcel_sys = ParcelLookup(PARCEL_DATA_URL)
         all_records = []
@@ -69,35 +70,23 @@ async def scrape_clerk():
         end_date = datetime.now().strftime("%m/%d/%Y")
         start_date = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%m/%d/%Y")
         
-        print(f"[*] Visiting: {CLERK_PORTAL_URL}")
-        await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
-        
-        # --- DIAGNOSTIC START: MAP THE PAGE ---
-        print("\n--- BEGIN PAGE MAP ---")
-        # Find every input, select, and button on the page
-        elements = await page.query_selector_all('input, select, button, textarea')
-        print(f"Found {len(elements)} interactive elements:")
-        for i, el in enumerate(elements):
-            name = await el.get_attribute('name') or "NO NAME"
-            id_ = await el.get_attribute('id') or "NO ID"
-            tag = await el.evaluate('el => el.tagName')
-            text = await el.inner_text() or ""
-            print(f"[{i}] Tag: {tag} | ID: {id_} | Name: {name} | Text: {text[:30]}")
-        print("--- END PAGE MAP ---\n")
-        # --- DIAGNOSTIC END ---
-
         for doc_label, doc_code in DOC_TYPES.items():
             print(f"[*] Checking {doc_label}...", end=" ")
             try:
-                # Using a generic search for the dropdown
+                await asyncio.sleep(3)
+                await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
+                
+                # If we still see the captcha, we stop immediately
+                if "recaptcha" in (await page.content()).lower():
+                    print("CAPTCHA DETECTED. GitHub IP is blocked.")
+                    break
+
                 dropdown = await page.query_selector('select')
                 if not dropdown:
-                    print("FAILED (No select found).")
+                    print("FAILED (No search box).")
                     continue
                 
                 await dropdown.select_option(label=doc_label)
-                
-                # Try to find the date inputs by order
                 date_inputs = await page.query_selector_all('input[type="text"]')
                 if len(date_inputs) >= 2:
                     await date_inputs[0].fill(start_date)
@@ -146,7 +135,7 @@ def export_ghl(records):
                              r['cat_label'], "Unknown", "Unknown", "0", "30", "Lead Found", "Greene County", ""])
 
 async def main():
-    print("[*] Starting FlowX Page-Mapper...")
+    print("[*] Starting FlowX Ultra-Stealth...")
     records = await scrape_clerk()
     output = {"fetched_at": datetime.now().isoformat(), "total": len(records), "records": records}
     os.makedirs("dashboard", exist_ok=True); os.makedirs("data", exist_ok=True)
