@@ -14,11 +14,11 @@ from playwright.async_api import async_playwright
 # AUTO-INSTALLER: Fixes the "ModuleNotFoundError" automatically
 # ==========================================
 try:
-    from playwright_stealth import stealth_async
+    from playwright_stealth import stealth
 except ImportError:
     print("[!] Stealth module missing. Installing now...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright-stealth"])
-    from playwright_stealth import stealth_async
+    from playwright_stealth import stealth
 
 # ==========================================
 # CONFIGURATION
@@ -64,16 +64,17 @@ class ParcelLookup:
 
 async def scrape_clerk():
     async with async_playwright() as p:
-        print("[*] Launching ULTRA-STEALTH Browser...")
-        browser = await p.chromium.launch(headless=True) 
+        print("[*] Launching FINAL-STEALTH Browser...")
+        # Using a slightly different browser launch to avoid detection
+        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"]) 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             viewport={'width': 1920, 'height': 1080}
         )
         page = await context.new_page()
         
-        # APPLY STEALTH PLUGIN
-        await stealth_async(page)
+        # APPLY STEALTH PLUGIN - Fixed call
+        await stealth(page)
         
         parcel_sys = ParcelLookup(PARCEL_DATA_URL)
         all_records = []
@@ -84,29 +85,45 @@ async def scrape_clerk():
         for doc_label, doc_code in DOC_TYPES.items():
             print(f"[*] Checking {doc_label}...", end=" ")
             try:
-                await asyncio.sleep(3)
+                await asyncio.sleep(4) # Extra delay to look more human
                 await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
                 
-                # Check for captcha
-                if "recaptcha" in (await page.content()).lower():
+                # Captcha check
+                page_content = await page.content()
+                if "recaptcha" in page_content.lower() or "g-recaptcha" in page_content.lower():
                     print("CAPTCHA DETECTED. GitHub IP is blocked.")
                     break
 
-                dropdown = await page.query_selector('select')
+                # SMART SEARCH FOR DROPDOWN
+                dropdown = None
+                for selector in ['select[name="doc_type"]', 'select', '.dropdown']:
+                    try:
+                        dropdown = await page.wait_for_selector(selector, timeout=5000)
+                        if dropdown: break
+                    except: continue
+                
                 if not dropdown:
                     print("FAILED (No search box).")
                     continue
                 
                 await dropdown.select_option(label=doc_label)
+                
+                # Find date inputs by type
                 date_inputs = await page.query_selector_all('input[type="text"]')
                 if len(date_inputs) >= 2:
                     await date_inputs[0].fill(start_date)
                     await date_inputs[1].fill(end_date)
                 
-                await page.click('input[type="submit"]')
+                # Find the search button
+                search_btn = await page.query_selector('input[type="submit"]')
+                if search_btn:
+                    await search_btn.click()
+                else:
+                    print("No search button found.")
+                    continue
                 
                 try:
-                    await page.wait_for_selector('#resultsTable', timeout=10000)
+                    await page.wait_for_selector('#resultsTable', timeout=15000)
                     print("Found data!")
                 except:
                     print("0 found.")
@@ -146,7 +163,7 @@ def export_ghl(records):
                              r['cat_label'], "Unknown", "Unknown", "0", "30", "Lead Found", "Greene County", ""])
 
 async def main():
-    print("[*] Starting FlowX Ultra-Stealth...")
+    print("[*] Starting FlowX Final-Stealth...")
     records = await scrape_clerk()
     output = {"fetched_at": datetime.now().isoformat(), "total": len(records), "records": records}
     os.makedirs("dashboard", exist_ok=True); os.makedirs("data", exist_ok=True)
