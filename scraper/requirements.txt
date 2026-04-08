@@ -4,3 +4,4 @@ lxml
 dbfread
 playwright
 pandas
+playwright-stealth
