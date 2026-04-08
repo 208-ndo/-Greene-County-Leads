@@ -2,12 +2,23 @@ import asyncio
 import json
 import os
 import csv
+import subprocess
+import sys
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 from dbfread import DBF
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+
+# ==========================================
+# AUTO-INSTALLER: Fixes the "ModuleNotFoundError" automatically
+# ==========================================
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    print("[!] Stealth module missing. Installing now...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright-stealth"])
+    from playwright_stealth import stealth_async
 
 # ==========================================
 # CONFIGURATION
@@ -76,7 +87,7 @@ async def scrape_clerk():
                 await asyncio.sleep(3)
                 await page.goto(CLERK_PORTAL_URL, wait_until="networkidle")
                 
-                # If we still see the captcha, we stop immediately
+                # Check for captcha
                 if "recaptcha" in (await page.content()).lower():
                     print("CAPTCHA DETECTED. GitHub IP is blocked.")
                     break
