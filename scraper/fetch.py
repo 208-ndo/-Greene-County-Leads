@@ -78,11 +78,13 @@ async def scrape_clerk():
                 await asyncio.sleep(2)
                 await page.goto(CLERK_PORTAL_URL, wait_until="domcontentloaded")
                 
-                # DIAGNOSTIC: Print what the bot actually sees
+                # FIXED: Moved string replacement out of the f-string to avoid SyntaxError
                 title = await page.title()
                 content = await page.content()
+                snippet = content[:500].replace('\n', ' ')
+                
                 print(f"\n    -> Page Title: {title}")
-                print(f"    -> Page Snippet: {content[:500].replace('\n', ' ')}...")
+                print(f"    -> Page Snippet: {snippet}...")
                 
                 try:
                     await page.wait_for_selector('select[name="doc_type"]', timeout=10000)
@@ -103,7 +105,12 @@ async def scrape_clerk():
                     continue
                 
                 soup = BeautifulSoup(await page.content(), 'lxml')
-                rows = soup.find('table', {'id': 'resultsTable'}).find_all('tr')[1:]
+                table = soup.find('table', {'id': 'resultsTable'})
+                if not table:
+                    print("    -> Table missing.")
+                    continue
+                    
+                rows = table.find_all('tr')[1:]
                 for row in rows:
                     cols = row.find_all('td')
                     if len(cols) < 5: continue
